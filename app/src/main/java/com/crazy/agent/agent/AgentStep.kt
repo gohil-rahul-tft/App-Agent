@@ -13,6 +13,7 @@ enum class ActionType {
     FIND_ELEMENT,
     CLICK,
     TYPE_TEXT,
+    PRESS_ENTER,
     SEARCH,
     WAIT,
     NAVIGATE_BACK

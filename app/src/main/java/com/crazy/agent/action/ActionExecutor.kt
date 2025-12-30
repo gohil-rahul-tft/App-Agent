@@ -27,6 +27,7 @@ class ActionExecutor @Inject constructor(@ApplicationContext private val context
                 ActionType.FIND_ELEMENT -> findElement(service, step.target)
                 ActionType.CLICK -> clickElement(service, step.target)
                 ActionType.TYPE_TEXT -> typeText(service, step.target, step.value ?: "")
+                ActionType.PRESS_ENTER -> pressEnter(service, step.target)
                 ActionType.SEARCH -> search(service, step.value ?: "")
                 ActionType.WAIT -> wait(step.target.toLongOrNull() ?: 1000)
                 ActionType.NAVIGATE_BACK -> navigateBack(service)
@@ -134,6 +135,31 @@ class ActionExecutor @Inject constructor(@ApplicationContext private val context
         } else {
             ActionResult.Failure("Failed to search")
         }
+    }
+
+    /** Press Enter on an input field */
+    private suspend fun pressEnter(
+            service: ScreenInteractionService,
+            fieldHint: String
+    ): ActionResult {
+        // Try to find the editable field
+        repeat(5) { attempt ->
+            val node = service.findEditableNode(fieldHint)
+            if (node != null) {
+                val pressed = service.pressEnter(node)
+                return if (pressed) {
+                    ActionResult.Success("Pressed Enter")
+                } else {
+                    ActionResult.Failure("Failed to press Enter")
+                }
+            }
+
+            if (attempt < 4) {
+                delay(500)
+            }
+        }
+
+        return ActionResult.Failure("Input field not found: $fieldHint")
     }
 
     /** Wait for specified duration */

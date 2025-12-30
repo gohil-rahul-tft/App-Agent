@@ -160,6 +160,21 @@ class ScreenInteractionService : AccessibilityService() {
         return performGlobalAction(GLOBAL_ACTION_HOME)
     }
 
+    /** Press Enter/Submit on the current focused input */
+    fun pressEnter(node: AccessibilityNodeInfo): Boolean {
+        // AccessibilityNodeInfo doesn't directly support IME actions like SEARCH/GO
+        // But we can try to set the text with a newline character as a fallback
+        // Or try to find a submit button nearby (simulated)
+
+        // As a workaround, we'll try to focus and click the node if it's clickable
+        // This sometimes triggers the default action
+        if (node.isClickable) {
+            return node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        }
+
+        return false
+    }
+
     /** Scroll down */
     fun scrollDown(): Boolean {
         val rootNode = rootInActiveWindow ?: return false
