@@ -10,10 +10,30 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.delay
 import timber.log.Timber
+import kotlin.coroutines.resume
 
 /** Executes agent steps using the accessibility service */
 @Singleton
 class ActionExecutor @Inject constructor(@ApplicationContext private val context: Context) {
+
+    /** Capture current screen state (Screenshot + UI Tree) */
+    suspend fun captureState(): Pair<android.graphics.Bitmap?, String> {
+        val service = ScreenInteractionService.getInstance()
+        if (service == null) {
+            Timber.e("Service not connected")
+            return null to "[]"
+        }
+
+        val tree = service.dumpWindowHierarchy()
+
+        return kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+            service.captureScreen(java.util.concurrent.Executors.newSingleThreadExecutor()) { bitmap ->
+                 if (cont.isActive) {
+                     cont.resume(bitmap to tree)
+                 }
+            }
+        }
+    }
 
     /** Execute a single step */
     suspend fun executeStep(step: AgentStep): ActionResult {
@@ -31,6 +51,9 @@ class ActionExecutor @Inject constructor(@ApplicationContext private val context
                 ActionType.SEARCH -> search(service, step.value ?: "")
                 ActionType.WAIT -> wait(step.target.toLongOrNull() ?: 1000)
                 ActionType.NAVIGATE_BACK -> navigateBack(service)
+                ActionType.SCROLL_DOWN -> scrollDown(service)
+                ActionType.SCROLL_UP -> scrollUp(service)
+                ActionType.TASK_COMPLETE -> ActionResult.Success("Task Complete")
             }
         } catch (e: Exception) {
             Timber.e(e, "Error executing step: ${step.description}")
@@ -175,6 +198,26 @@ class ActionExecutor @Inject constructor(@ApplicationContext private val context
             ActionResult.Success("Navigated back")
         } else {
             ActionResult.Failure("Failed to navigate back")
+        }
+    }
+
+    /** Scroll down */
+    private suspend fun scrollDown(service: ScreenInteractionService): ActionResult {
+        val success = service.scrollDown()
+        return if (success) {
+            ActionResult.Success("Scrolled down")
+        } else {
+            ActionResult.Failure("Failed to scroll down (no scrollable container found?)")
+        }
+    }
+
+    /** Scroll up */
+    private suspend fun scrollUp(service: ScreenInteractionService): ActionResult {
+        val success = service.scrollUp()
+        return if (success) {
+            ActionResult.Success("Scrolled up")
+        } else {
+            ActionResult.Failure("Failed to scroll up")
         }
     }
 

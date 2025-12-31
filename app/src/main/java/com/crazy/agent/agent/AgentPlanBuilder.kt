@@ -10,10 +10,13 @@ class AgentPlanBuilder
 @Inject
 constructor(private val commandParser: CommandParser, private val geminiClient: GeminiClient) {
 
+    fun getGeminiClient(): GeminiClient = geminiClient
+
+
         /** Parse a natural language command into a list of executable steps */
-        suspend fun buildPlan(command: String): List<AgentStep> {
+        suspend fun buildPlan(command: String, history: String? = null): List<AgentStep> {
                 // Try Gemini first
-                val geminiPlan = geminiClient.generatePlan(command)
+                val geminiPlan = geminiClient.generatePlan(command, history)
                 if (geminiPlan != null) {
                         val steps = parseGeminiPlan(geminiPlan)
                         if (steps.isNotEmpty()) {

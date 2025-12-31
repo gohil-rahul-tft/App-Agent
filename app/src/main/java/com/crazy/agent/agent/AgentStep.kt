@@ -16,5 +16,8 @@ enum class ActionType {
     PRESS_ENTER,
     SEARCH,
     WAIT,
-    NAVIGATE_BACK
+    NAVIGATE_BACK,
+    SCROLL_DOWN,
+    SCROLL_UP,
+    TASK_COMPLETE
 }

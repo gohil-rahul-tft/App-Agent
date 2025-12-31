@@ -51,8 +51,8 @@ class ScreenInteractionService : AccessibilityService() {
 
         val matches =
                 if (exactMatch) {
-                    nodeText.equals(text, ignoreCase = true) ||
-                            contentDesc.equals(text, ignoreCase = true)
+                    nodeText.trim().equals(text.trim(), ignoreCase = true) ||
+                            contentDesc.trim().equals(text.trim(), ignoreCase = true)
                 } else {
                     nodeText.contains(text, ignoreCase = true) ||
                             contentDesc.contains(text, ignoreCase = true)
@@ -162,14 +162,29 @@ class ScreenInteractionService : AccessibilityService() {
 
     /** Press Enter/Submit on the current focused input */
     fun pressEnter(node: AccessibilityNodeInfo): Boolean {
-        // AccessibilityNodeInfo doesn't directly support IME actions like SEARCH/GO
-        // But we can try to set the text with a newline character as a fallback
-        // Or try to find a submit button nearby (simulated)
-
-        // As a workaround, we'll try to focus and click the node if it's clickable
-        // This sometimes triggers the default action
+        // 1. Try to click the node itself (sometimes triggers IME action)
         if (node.isClickable) {
-            return node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            val clicked = node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            if (clicked) return true
+        }
+
+        // 2. Try to find a "Submit" button nearby (Search, Send, Go, etc.)
+        val commonSubmitTerms = listOf("Search", "Send", "Go", "Enter", "Submit", "Done")
+        for (term in commonSubmitTerms) {
+            val submitNode = findNodeByText(term, exactMatch = false)
+            if (submitNode != null && submitNode.isClickable) {
+                Timber.d("Found submit button using term: $term")
+                return submitNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            }
+        }
+        
+        // 3. Last resort: Try to click the parent if it's clickable
+        var parent = node.parent
+        while (parent != null) {
+            if (parent.isClickable) {
+                 return parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            }
+            parent = parent.parent
         }
 
         return false
@@ -188,20 +203,126 @@ class ScreenInteractionService : AccessibilityService() {
     }
 
     /** Get all text from screen (useful for debugging) */
-    fun getAllTextFromScreen(): List<String> {
+    /*fun getAllTextFromScreen(): List<String> {
         val rootNode = rootInActiveWindow ?: return emptyList()
         val texts = mutableListOf<String>()
         collectAllText(rootNode, texts)
         return texts
+    }*/
+
+    /** Capture the current screen (Requires API 30+) */
+    fun captureScreen(
+            executor: java.util.concurrent.Executor,
+            callback: (android.graphics.Bitmap?) -> Unit
+    ) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            takeScreenshot(
+                    android.view.Display.DEFAULT_DISPLAY,
+                    executor,
+                    object : TakeScreenshotCallback {
+                        override fun onSuccess(screenshot: ScreenshotResult) {
+                            val bitmap =
+                                    android.graphics.Bitmap.wrapHardwareBuffer(
+                                            screenshot.hardwareBuffer,
+                                            screenshot.colorSpace
+                                    )
+                            // Copy to software bitmap for easier processing if needed, 
+                            // or just pass the hardware bitmap. 
+                            // Hardware bitmaps are immutable and strict about access.
+                            // Let's copy it to be safe for Gemini processing.
+                            val softwareBitmap = bitmap?.copy(android.graphics.Bitmap.Config.ARGB_8888, false)
+                            screenshot.hardwareBuffer.close()
+                            callback(softwareBitmap)
+                        }
+
+                        override fun onFailure(errorCode: Int) {
+                            Timber.e("Screenshot failed with error code: $errorCode")
+                            callback(null)
+                        }
+                    }
+            )
+        } else {
+            Timber.e("Screen capture requires Android 11+ (API 30)")
+            callback(null)
+        }
     }
 
-    private fun collectAllText(node: AccessibilityNodeInfo, result: MutableList<String>) {
-        node.text?.toString()?.let { if (it.isNotBlank()) result.add(it) }
-        node.contentDescription?.toString()?.let { if (it.isNotBlank()) result.add(it) }
+    /** Dump the current window hierarchy to a simplified JSON string */
+    fun dumpWindowHierarchy(): String {
+        val rootNode = rootInActiveWindow ?: return "[]"
+        val sb = StringBuilder()
+        sb.append("[")
+        dumpNodeRecursive(rootNode, sb)
+        sb.append("]")
+        return sb.toString()
+    }
 
-        for (i in 0 until node.childCount) {
-            val child = node.getChild(i) ?: continue
-            collectAllText(child, result)
+    private fun dumpNodeRecursive(node: AccessibilityNodeInfo, sb: StringBuilder) {
+        // Only include interesting nodes to save tokens
+        if (isVisible(node)) {
+            sb.append("{")
+            
+            // Basic Info
+            sb.append("\"class\":\"${node.className}\",")
+            
+            // Text/Desc
+            val text = node.text?.toString()?.ellipsize(50)
+            if (!text.isNullOrBlank()) sb.append("\"text\":\"$text\",")
+            
+            val desc = node.contentDescription?.toString()?.ellipsize(50)
+            if (!desc.isNullOrBlank()) sb.append("\"desc\":\"$desc\",")
+            
+            // IDs are tricky in AccessibilityNodeInfo, use viewIdResourceName if available
+            val viewId = node.viewIdResourceName
+            if (viewId != null) sb.append("\"id\":\"$viewId\",")
+
+            // Bounds
+            val bounds = android.graphics.Rect()
+            node.getBoundsInScreen(bounds)
+            sb.append("\"bounds\":\"${bounds.toShortString()}\",")
+
+            // Actions
+            if (node.isClickable) sb.append("\"clickable\":true,")
+            if (node.isScrollable) sb.append("\"scrollable\":true,")
+            if (node.isEditable) sb.append("\"editable\":true,")
+
+            // Children
+            if (node.childCount > 0) {
+                sb.append("\"children\":[")
+                var firstChild = true
+                for (i in 0 until node.childCount) {
+                    val child = node.getChild(i) ?: continue
+                    if (isVisible(child)) { // Prune invisible branches early
+                         if (!firstChild) sb.append(",")
+                         dumpNodeRecursive(child, sb)
+                         firstChild = false
+                    }
+                }
+                sb.append("]")
+            } else {
+                 // Remove trailing comma if no children but properties added
+                 if (sb.endsWith(",")) sb.setLength(sb.length - 1)
+            }
+            
+            // Close object
+            if (sb.endsWith(",")) sb.setLength(sb.length - 1)
+            sb.append("}")
         }
+    }
+
+    private fun isVisible(node: AccessibilityNodeInfo): Boolean {
+        // Basic visibility check
+        if (!node.isVisibleToUser) return false
+        
+        val bounds = android.graphics.Rect()
+        node.getBoundsInScreen(bounds)
+        // Check if bounds are empty or off-screen (basic check)
+        if (bounds.isEmpty) return false
+        
+        return true
+    }
+
+    private fun String.ellipsize(maxLength: Int): String {
+        return if (this.length > maxLength) this.take(maxLength) + "..." else this.replace("\"", "\\\"")
     }
 }

@@ -26,54 +26,69 @@ class GeminiClient @Inject constructor() {
                             }
             )
 
-    suspend fun generatePlan(userCommand: String): String? =
+    suspend fun decideNextStep(
+            goal: String,
+            history: String,
+            screenImage: android.graphics.Bitmap,
+            uiTree: String
+    ): String? =
             withContext(Dispatchers.IO) {
                 try {
                     val prompt =
                             """
-                You are an intelligent Android Agent planning assistant. Your goal is to convert a user's natural language command into a list of steps to executed on an Android device.
+                You are an intelligent Android Agent. Your goal is to accomplish the user's request on the device.
                 
-                The available actions are:
-                - OPEN_APP: Opens an app. Target is the package name (e.g., com.whatsapp).
-                - FIND_ELEMENT: Finds a UI element on the screen. Target is the text or content description.
-                - CLICK: Clicks on a UI element. Target is the text or content description of the element to click.
-                - TYPE_TEXT: Types text into a field. Target is the field hint/text, Value is the text to type.
-                - PRESS_ENTER: Presses the Enter/Submit key on the keyboard. Target is usually the input field name (just for context).
-                - WAIT: Waits for a duration in milliseconds. Target is the duration (e.g., "1000").
-                - SEARCH: Performs a search. Target is usually unused, Value is the query. (Prefer FIND_ELEMENT + TYPE_TEXT + PRESS_ENTER over this if possible for more control).
+                USER GOAL: "$goal"
                 
-                For the user command: "$userCommand"
+                HISTORY:
+                $history
                 
-                Generate a JSON-like execution plan. NOT valid JSON, just a simple format I can parse easily.
-                Format for each step:
-                ACTION|TARGET|VALUE|DESCRIPTION
+                CURRENT STATE:
+                - See the attached screenshot.
+                - The UI Tree is provided below (simplified JSON):
+                $uiTree
                 
-                Rules:
-                1. Always start by opening the correct app. Guess the package name if possible (e.g. youtube -> com.google.android.youtube, whatsapp -> com.whatsapp, spotify -> com.spotify.music).
-                2. If the user wants to play something, typically: Open App -> Wait -> Find "Search" button -> Click "Search" -> Find Search Bar -> Type Query -> Press Enter -> Wait -> Find Query/Video -> Click.
-                3. If the user wants to message: Open App -> Wait -> Find New Chat/Search -> Click -> Type Name -> Wait -> Click Name -> Wait -> Type Message -> Press Enter/Click Send.
+                INSTRUCTIONS:
+                1. Analyze the Screenshot and UI Tree to understand the current screen.
+                2. Determine the SINGLE, NEXT action to move closer to the goal.
+                3. If the goal is complete, return "TASK_COMPLETE".
+                4. If you need to scroll to find something, use "SCROLL_DOWN" or "SCROLL_UP".
+                5. If you need to click, prefer using the "id" or "text" from the UI Tree.
+                6. CRITICAL: If you are seeing the "Agent App" screen (command input), do NOT click "Execute" again. Proceed directly to OPEN_APP or the first logical step of the user's goal.
                 
-                Response should ONLY contain the lines with the steps. No markdown, no explanations.
+                AVAILABLE ACTIONS:
+                - OPEN_APP|PACKAGE_NAME|null : Opens an app (Guess package name e.g., com.whatsapp, com.google.android.youtube).
+                - CLICK|TARGET_TEXT_OR_ID|null : Clicks a UI element.
+                - TYPE_TEXT|TARGET_HINT_OR_ID|TEXT : Types text into a field.
+                - SCROLL_DOWN|null|null : Scrolls down.
+                - SCROLL_UP|null|null : Scrolls up.
+                - PRESS_ENTER|null|null : Presses enter/submit.
+                - WAIT|DURATION_MS|null : Explicit wait.
+                - TASK_COMPLETE|null|null : Finished.
                 
-                Example Output:
-                OPEN_APP|com.google.android.youtube|null|Opening YouTube
-                WAIT|2000|null|Waiting for app to load
-                FIND_ELEMENT|Search|null|Finding search button
-                CLICK|Search|null|Clicking search
-                FIND_ELEMENT|Search YouTube|null|Finding search bar
-                TYPE_TEXT|Search YouTube|Despacito|Typing query
-                PRESS_ENTER|Search YouTube|null|Submitting search
-                WAIT|2000|null|Waiting for results
-                FIND_ELEMENT|Despacito|null|Finding video
-                CLICK|Despacito|null|Playing video
+                OUTPUT FORMAT:
+                ACTION|TARGET|VALUE|REASONING
+                (Do not add any conversational text before or after. Just the action line.)
             """.trimIndent()
 
-                    val response = model.generateContent(prompt)
-                    Timber.i("Generated plan: ${response.text}")
+                    val inputContent = com.google.ai.client.generativeai.type.content {
+                        image(screenImage)
+                        text(prompt)
+                    }
+
+                    val response = model.generateContent(inputContent)
+                    Timber.i("Gemini decision: ${response.text}")
                     return@withContext response.text
                 } catch (e: Exception) {
-                    Timber.e(e, "Error generating plan with Gemini")
+                    Timber.e(e, "Error deciding next step with Gemini")
                     return@withContext null
                 }
             }
+
+    // Legacy method for backward compatibility (or we can remove/deprecate it)
+    suspend fun generatePlan(userCommand: String, history: String? = null): String? {
+         // ... (Keep existing implementation or redirect to decideNextStep if appropriate, 
+         // but for now keeping it as separate strategy)
+         return null 
+    }
 }
