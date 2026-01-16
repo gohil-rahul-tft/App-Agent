@@ -1,6 +1,7 @@
 package com.crazy.agent.agent
 
 import com.crazy.agent.gemini.GeminiClient
+import com.crazy.agent.groq.GroqClient
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -8,9 +9,14 @@ import javax.inject.Singleton
 @Singleton
 class AgentPlanBuilder
 @Inject
-constructor(private val commandParser: CommandParser, private val geminiClient: GeminiClient) {
+constructor(
+    private val commandParser: CommandParser,
+    private val geminiClient: GeminiClient,
+    private val groqClient: GroqClient
+) {
 
     fun getGeminiClient(): GeminiClient = geminiClient
+    fun getGroqClient(): GroqClient = groqClient
 
 
         /** Parse a natural language command into a list of executable steps */

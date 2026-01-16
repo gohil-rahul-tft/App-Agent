@@ -15,9 +15,7 @@ hilt {
 
 android {
     namespace = "com.crazy.agent"
-    compileSdk {
-        version = release(36)
-    }
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.crazy.agent"
@@ -36,6 +34,12 @@ android {
         }
         val geminiApiKey = localProperties.getProperty("GEMINI_API_KEY") ?: "TODO_API_KEY"
         buildConfigField("String", "GEMINI_API_KEY", "\"$geminiApiKey\"")
+
+        val groqApiKey = localProperties.getProperty("GROQ_API_KEY") ?: "TODO_API_KEY"
+        buildConfigField("String", "GROQ_API_KEY", "\"$groqApiKey\"")
+
+        val openRouterApiKey = localProperties.getProperty("OPENROUTER_API_KEY") ?: "TODO_API_KEY"
+        buildConfigField("String", "OPENROUTER_API_KEY", "\"$openRouterApiKey\"")
     }
 
     buildTypes {
@@ -83,6 +87,10 @@ dependencies {
 
     // Gemini AI
     implementation(libs.google.generativeai)
+
+    // Groq AI (via OkHttp)
+    implementation(libs.okhttp)
+    implementation(libs.gson)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

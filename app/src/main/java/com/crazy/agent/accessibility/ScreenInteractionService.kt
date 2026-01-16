@@ -49,13 +49,17 @@ class ScreenInteractionService : AccessibilityService() {
         val nodeText = node.text?.toString() ?: ""
         val contentDesc = node.contentDescription?.toString() ?: ""
 
+        val nodeId = node.viewIdResourceName ?: ""
+
         val matches =
                 if (exactMatch) {
                     nodeText.trim().equals(text.trim(), ignoreCase = true) ||
-                            contentDesc.trim().equals(text.trim(), ignoreCase = true)
+                            contentDesc.trim().equals(text.trim(), ignoreCase = true) ||
+                            nodeId.trim().equals(text.trim(), ignoreCase = true)
                 } else {
                     nodeText.contains(text, ignoreCase = true) ||
-                            contentDesc.contains(text, ignoreCase = true)
+                            contentDesc.contains(text, ignoreCase = true) ||
+                            nodeId.contains(text, ignoreCase = true)
                 }
 
         if (matches) {
@@ -114,10 +118,12 @@ class ScreenInteractionService : AccessibilityService() {
             val nodeText = node.text?.toString() ?: ""
             val contentDesc = node.contentDescription?.toString() ?: ""
             val hint = node.hintText?.toString() ?: ""
+            val nodeId = node.viewIdResourceName ?: ""
 
             if (nodeText.contains(hintText, ignoreCase = true) ||
                             contentDesc.contains(hintText, ignoreCase = true) ||
-                            hint.contains(hintText, ignoreCase = true)
+                            hint.contains(hintText, ignoreCase = true) ||
+                            nodeId.contains(hintText, ignoreCase = true)
             ) {
                 return node
             }
@@ -193,13 +199,105 @@ class ScreenInteractionService : AccessibilityService() {
     /** Scroll down */
     fun scrollDown(): Boolean {
         val rootNode = rootInActiveWindow ?: return false
-        return rootNode.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+        val scrollableNode = findScrollableNode(rootNode)
+        if (scrollableNode != null) {
+            val result = scrollableNode.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+            Timber.d("Scroll down result: $result on node: ${scrollableNode.className}")
+            return result
+        }
+        Timber.w("No scrollable node found")
+        return false
     }
 
     /** Scroll up */
     fun scrollUp(): Boolean {
         val rootNode = rootInActiveWindow ?: return false
-        return rootNode.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)
+        val scrollableNode = findScrollableNode(rootNode)
+        if (scrollableNode != null) {
+            val result = scrollableNode.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)
+            Timber.d("Scroll up result: $result on node: ${scrollableNode.className}")
+            return result
+        }
+        Timber.w("No scrollable node found")
+        return false
+    }
+    
+    private fun findScrollableNode(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        // Prefer RecyclerView/ListView
+        if (node.isScrollable) {
+            val className = node.className?.toString() ?: ""
+            if (className.contains("RecyclerView") || 
+                className.contains("ListView") || 
+                className.contains("ScrollView")) {
+                return node
+            }
+        }
+        
+        // Search children
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val result = findScrollableNode(child)
+            if (result != null) return result
+        }
+        
+        // Fallback: return any scrollable node
+        if (node.isScrollable) return node
+        
+        return null
+    }
+
+    /** Find a list item by its index */
+    fun findListItemByIndex(elementType: String, index: Int): AccessibilityNodeInfo? {
+        val rootNode = rootInActiveWindow ?: return null
+        return findListItemByIndexRecursive(rootNode, elementType, index)
+    }
+
+    private fun findListItemByIndexRecursive(
+            node: AccessibilityNodeInfo,
+            elementType: String,
+            targetIndex: Int
+    ): AccessibilityNodeInfo? {
+        // Check if this is a list container
+        val className = node.className?.toString() ?: ""
+        if (className.contains("RecyclerView") || className.contains("ListView") || className.contains("GridView")) {
+            // Found a list, now find the child at the target index
+            var currentIndex = 0
+            for (i in 0 until node.childCount) {
+                val child = node.getChild(i) ?: continue
+                if (!isVisible(child)) continue
+                
+                // Check if this child matches the element type
+                if (matchesElementType(child, elementType)) {
+                    if (currentIndex == targetIndex) {
+                        return child
+                    }
+                    currentIndex++
+                }
+            }
+        }
+
+        // Recursively search children
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val result = findListItemByIndexRecursive(child, elementType, targetIndex)
+            if (result != null) {
+                return result
+            }
+        }
+
+        return null
+    }
+
+    private fun matchesElementType(node: AccessibilityNodeInfo, elementType: String): Boolean {
+        val desc = node.contentDescription?.toString() ?: ""
+        val id = node.viewIdResourceName ?: ""
+        
+        return when (elementType) {
+            "video" -> desc.contains("minute") && desc.contains("second")
+            "button" -> node.className?.toString()?.contains("Button") == true
+            "input", "search_field" -> node.isEditable
+            else -> true // Match any if type is not specific
+        }
     }
 
     /** Get all text from screen (useful for debugging) */
@@ -257,56 +355,152 @@ class ScreenInteractionService : AccessibilityService() {
         return sb.toString()
     }
 
-    private fun dumpNodeRecursive(node: AccessibilityNodeInfo, sb: StringBuilder) {
+    private fun dumpNodeRecursive(node: AccessibilityNodeInfo, sb: StringBuilder, depth: Int = 0, indexInParent: Int = -1, parentIsListContainer: Boolean = false) {
+        // Check if THIS node is a list container
+        val isThisNodeListContainer = isListContainer(node)
+        
         // Only include interesting nodes to save tokens
-        if (isVisible(node)) {
-            sb.append("{")
-            
-            // Basic Info
-            sb.append("\"class\":\"${node.className}\",")
-            
-            // Text/Desc
-            val text = node.text?.toString()?.ellipsize(50)
-            if (!text.isNullOrBlank()) sb.append("\"text\":\"$text\",")
-            
-            val desc = node.contentDescription?.toString()?.ellipsize(50)
-            if (!desc.isNullOrBlank()) sb.append("\"desc\":\"$desc\",")
-            
-            // IDs are tricky in AccessibilityNodeInfo, use viewIdResourceName if available
-            val viewId = node.viewIdResourceName
-            if (viewId != null) sb.append("\"id\":\"$viewId\",")
-
-            // Bounds
-            val bounds = android.graphics.Rect()
-            node.getBoundsInScreen(bounds)
-            sb.append("\"bounds\":\"${bounds.toShortString()}\",")
-
-            // Actions
-            if (node.isClickable) sb.append("\"clickable\":true,")
-            if (node.isScrollable) sb.append("\"scrollable\":true,")
-            if (node.isEditable) sb.append("\"editable\":true,")
-
-            // Children
-            if (node.childCount > 0) {
-                sb.append("\"children\":[")
-                var firstChild = true
-                for (i in 0 until node.childCount) {
-                    val child = node.getChild(i) ?: continue
-                    if (isVisible(child)) { // Prune invisible branches early
-                         if (!firstChild) sb.append(",")
-                         dumpNodeRecursive(child, sb)
-                         firstChild = false
-                    }
-                }
-                sb.append("]")
-            } else {
-                 // Remove trailing comma if no children but properties added
-                 if (sb.endsWith(",")) sb.setLength(sb.length - 1)
+        if (!isInterestingNode(node)) {
+            // Still traverse children of uninteresting nodes
+            // Pass down the list container flag if this node is a list
+            val passDownListFlag = isThisNodeListContainer || parentIsListContainer
+            for (i in 0 until node.childCount) {
+                val child = node.getChild(i) ?: continue
+                dumpNodeRecursive(child, sb, depth, i, passDownListFlag)
             }
-            
-            // Close object
+            return
+        }
+        
+        if (sb.length > 1 && sb[sb.length - 1] != '[' && sb[sb.length - 1] != ',') {
+            sb.append(",")
+        }
+        
+        sb.append("{")
+        
+        // Detect element type for common patterns
+        val elementType = detectElementType(node)
+        if (elementType != null) {
+            sb.append("\"type\":\"$elementType\",")
+        }
+        
+        // Add index if we're inside a list container (even if nested)
+        // Only add index to "interesting" nodes that are direct or nested children of list
+        if (indexInParent >= 0 && parentIsListContainer && !isThisNodeListContainer) {
+            sb.append("\"index\":$indexInParent,")
+        }
+        
+        // Text/Desc (prioritize these as they're most useful)
+        val text = node.text?.toString()?.ellipsize(80)
+        if (!text.isNullOrBlank()) sb.append("\"text\":\"$text\",")
+        
+        val desc = node.contentDescription?.toString()?.ellipsize(80)
+        if (!desc.isNullOrBlank()) sb.append("\"desc\":\"$desc\",")
+        
+        // Resource ID (useful for targeting)
+        val viewId = node.viewIdResourceName
+        if (viewId != null) {
+            val shortId = viewId.substringAfterLast("/")
+            sb.append("\"id\":\"$shortId\",")
+        }
+        
+        // Simplified position instead of exact bounds
+        val bounds = android.graphics.Rect()
+        node.getBoundsInScreen(bounds)
+        val screenHeight = 2280 // Approximate, could get from resources
+        val position = when {
+            bounds.top < screenHeight / 3 -> "top"
+            bounds.top < 2 * screenHeight / 3 -> "mid"
+            else -> "bot"
+        }
+        sb.append("\"pos\":\"$position\",")
+        
+        // Actions (only if true)
+        if (node.isClickable) sb.append("\"click\":true,")
+        if (node.isScrollable) sb.append("\"scroll\":true,")
+        if (node.isEditable) sb.append("\"edit\":true,")
+        
+        // Children (recursively, but skip wrapper nodes)
+        val interestingChildren = mutableListOf<AccessibilityNodeInfo>()
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            if (isVisible(child)) {
+                interestingChildren.add(child)
+            }
+        }
+        
+        if (interestingChildren.isNotEmpty()) {
+            sb.append("\"children\":[")
+            // If THIS node is a list container, its children should get indices
+            // Otherwise, pass down the parent's list container flag
+            val passDownListFlag = if (isThisNodeListContainer) true else parentIsListContainer
+            interestingChildren.forEachIndexed { idx, child ->
+                dumpNodeRecursive(child, sb, depth + 1, idx, passDownListFlag)
+            }
+            sb.append("]")
+        } else {
+            // Remove trailing comma if no children
             if (sb.endsWith(",")) sb.setLength(sb.length - 1)
-            sb.append("}")
+        }
+        
+        // Close object
+        if (sb.endsWith(",")) sb.setLength(sb.length - 1)
+        sb.append("}")
+    }
+    
+    private fun isListContainer(node: AccessibilityNodeInfo): Boolean {
+        val className = node.className?.toString() ?: ""
+        return className.contains("RecyclerView") || 
+               className.contains("ListView") ||
+               className.contains("GridView")
+    }
+    
+    private fun isInterestingNode(node: AccessibilityNodeInfo): Boolean {
+        // A node is interesting if it has meaningful content or actions
+        val hasText = !node.text.isNullOrBlank()
+        val hasDesc = !node.contentDescription.isNullOrBlank()
+        val hasId = node.viewIdResourceName != null
+        val isInteractive = node.isClickable || node.isEditable || node.isScrollable
+        val isContainer = node.className?.toString()?.contains("RecyclerView") == true ||
+                         node.className?.toString()?.contains("ListView") == true
+        
+        return hasText || hasDesc || hasId || isInteractive || isContainer
+    }
+    
+    private fun isListItem(node: AccessibilityNodeInfo): Boolean {
+        // Check if parent is a RecyclerView or ListView
+        val parent = node.parent ?: return false
+        val parentClass = parent.className?.toString() ?: ""
+        return parentClass.contains("RecyclerView") || 
+               parentClass.contains("ListView") ||
+               parentClass.contains("GridView")
+    }
+    
+    private fun detectElementType(node: AccessibilityNodeInfo): String? {
+        val className = node.className?.toString() ?: return null
+        val id = node.viewIdResourceName ?: ""
+        val desc = node.contentDescription?.toString() ?: ""
+        val text = node.text?.toString() ?: ""
+        
+        return when {
+            // Video/media items
+            desc.contains("minute") && desc.contains("second") -> "video"
+            id.contains("thumbnail") -> "video"
+            
+            // Search fields
+            id.contains("search") && node.isEditable -> "search_field"
+            text.contains("Search", ignoreCase = true) && node.isEditable -> "search_field"
+            
+            // Buttons
+            className.contains("Button") -> "button"
+            
+            // Text input
+            node.isEditable -> "input"
+            
+            // Lists
+            className.contains("RecyclerView") -> "list"
+            className.contains("ListView") -> "list"
+            
+            else -> null
         }
     }
 

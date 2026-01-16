@@ -52,63 +52,61 @@ constructor(private val planBuilder: AgentPlanBuilder, private val actionExecuto
                 // 2. Think: Ask Gemini
                 _uiState.value = CommandUiState.Executing(stepCount + 1, maxSteps, "Thinking...")
                 
-                // Allow Gemini to see history of recent actions
-                val decision = planBuilder.getGeminiClient().decideNextStep(
+                // DEBUG: Print the serialized accessibility tree
+                Timber.d("========== ACCESSIBILITY TREE (Step ${stepCount + 1}) ==========")
+                Timber.d(uiTree)
+                Timber.d("========== END ACCESSIBILITY TREE ==========")
+                
+                // Allow Agent to see history of recent actions
+                // Using GroqClient (OpenRouter with Gemini 2.0 Flash) instead of legacy Gemini
+                val agentAction = planBuilder.getGroqClient().decideNextStep(
                      goal = command,
                      history = history.toString(),
                      screenImage = bitmap,
                      uiTree = uiTree
                 )
 
-                if (decision == null) {
-                     _uiState.value = CommandUiState.Error("Gemini failed to make a decision.")
+                if (agentAction == null) {
+                     _uiState.value = CommandUiState.Error("LLM failed to make a decision.")
                      return@launch
                 }
                 
                 // 3. Act: Parse and Execute
-                // Format: ACTION|TARGET|VALUE|REASONING
-                // Use regex to find the action line in case Gemini adds conversational text
-                val actionRegex = Regex("""(OPEN_APP|CLICK|TYPE_TEXT|SCROLL_DOWN|SCROLL_UP|PRESS_ENTER|WAIT|TASK_COMPLETE)\|""")
-                val match = actionRegex.find(decision)
+                // The LLM now returns a structured JSON AgentAction object
+                val actionStr = agentAction.action
+                val target = agentAction.target ?: ""
+                val value = agentAction.value
+                val reasoning = agentAction.reasoning
+                val todoStatus = agentAction.todo_status
                 
-                if (match != null) {
-                    val startIndex = match.range.first
-                    val actionLine = decision.substring(startIndex).lines().first()
-                    val parts = actionLine.split("|")
+                Timber.d("Action: $actionStr | Target: $target | Value: $value")
+                Timber.d("Reasoning: $reasoning")
+                Timber.d("TODO: $todoStatus")
+                
+                if (actionStr == "TASK_COMPLETE") {
+                    _uiState.value = CommandUiState.Success
+                    return@launch
+                }
+                
+                try {
+                    val actionType = com.crazy.agent.agent.ActionType.valueOf(actionStr)
+                    val step = AgentStep(actionType, target, value, reasoning)
                     
-                    val actionStr = parts[0].trim()
+                    _uiState.value = CommandUiState.Executing(stepCount + 1, maxSteps, reasoning)
                     
-                    if (actionStr == "TASK_COMPLETE") {
-                        _uiState.value = CommandUiState.Success
-                        return@launch
-                    }
+                    val result = actionExecutor.executeStep(step)
                     
-                    val target = if (parts.size > 1) parts[1].trim() else ""
-                    val value = if (parts.size > 2) parts[2].trim() else null
-                    val reasoning = if (parts.size > 3) parts[3].trim() else "Executing action"
+                    // Log execution
+                    val execution = StepExecution(step, result, stepCount)
+                    _executedSteps.value = _executedSteps.value + execution
                     
-                    try {
-                        val actionType = com.crazy.agent.agent.ActionType.valueOf(actionStr)
-                        val step = AgentStep(actionType, target, value, reasoning)
-                        
-                        _uiState.value = CommandUiState.Executing(stepCount + 1, maxSteps, reasoning)
-                        
-                        val result = actionExecutor.executeStep(step)
-                        
-                        // Log execution
-                        val execution = StepExecution(step, result, stepCount)
-                        _executedSteps.value = _executedSteps.value + execution
-                        
-                        // Update History
-                        history.append("Step ${stepCount + 1}: $actionLine -> Result: ${if(result is ActionResult.Success) "Success" else "Fail: ${(result as ActionResult.Failure).error}"}\n")
-                        
-                    } catch (e: Exception) {
-                        Timber.e("Invalid action type (enum parse): $actionStr")
-                        // history.append("Step ${stepCount + 1}: Failed to parse action $actionStr\n")
-                    }
-                } else {
-                     Timber.e("No valid action found in decision: $decision")
-                     // history.append("Step ${stepCount + 1}: Gemini output invalid format\n")
+                    // Update History with TODO status
+                    val resultStr = if(result is ActionResult.Success) "Success" else "Fail: ${(result as ActionResult.Failure).error}"
+                    history.append("Step ${stepCount + 1}: $actionStr|$target|$value -> Result: $resultStr | TODO: $todoStatus\n")
+                    
+                } catch (e: Exception) {
+                    Timber.e(e, "Invalid action type (enum parse): $actionStr")
+                    history.append("Step ${stepCount + 1}: Failed to parse action $actionStr\n")
                 }
                 
                 stepCount++

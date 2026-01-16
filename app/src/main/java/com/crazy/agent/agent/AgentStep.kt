@@ -12,6 +12,7 @@ enum class ActionType {
     OPEN_APP,
     FIND_ELEMENT,
     CLICK,
+    CLICK_INDEX,  // Click Nth item in a list (target = element type, value = index)
     TYPE_TEXT,
     PRESS_ENTER,
     SEARCH,

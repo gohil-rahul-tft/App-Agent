@@ -46,6 +46,7 @@ class ActionExecutor @Inject constructor(@ApplicationContext private val context
                 ActionType.OPEN_APP -> openApp(step.target)
                 ActionType.FIND_ELEMENT -> findElement(service, step.target)
                 ActionType.CLICK -> clickElement(service, step.target)
+                ActionType.CLICK_INDEX -> clickByIndex(service, step.target, step.value?.toIntOrNull() ?: 0)
                 ActionType.TYPE_TEXT -> typeText(service, step.target, step.value ?: "")
                 ActionType.PRESS_ENTER -> pressEnter(service, step.target)
                 ActionType.SEARCH -> search(service, step.value ?: "")
@@ -219,6 +220,32 @@ class ActionExecutor @Inject constructor(@ApplicationContext private val context
         } else {
             ActionResult.Failure("Failed to scroll up")
         }
+    }
+
+    /** Click an element by its index in a list */
+    private suspend fun clickByIndex(
+            service: ScreenInteractionService,
+            elementType: String,
+            index: Int
+    ): ActionResult {
+        // Try to find the list item by index
+        repeat(5) { attempt ->
+            val node = service.findListItemByIndex(elementType, index)
+            if (node != null) {
+                val clicked = service.clickNode(node)
+                return if (clicked) {
+                    ActionResult.Success("Clicked item at index $index")
+                } else {
+                    ActionResult.Failure("Failed to click item at index $index")
+                }
+            }
+
+            if (attempt < 4) {
+                delay(500)
+            }
+        }
+
+        return ActionResult.Failure("Element at index $index not found")
     }
 
     /** Execute a list of steps sequentially */
